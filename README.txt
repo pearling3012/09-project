@@ -1,9 +1,3 @@
-/* Group: 09
-   Members: PARINKARN Sasina   (EID: sparinkar2, Student ID: 59016540)
-            LE Vinh Thanh Linh (EID: vtlle2,     Student ID: 59257310)
-            BONGONI Revan      (EID: rbongoni2,  Student ID: 59036838)
-*/
-
 CS3103 Project — Midnight Warehouse OS Simulation
 
 Group 9
