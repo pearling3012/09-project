@@ -68,8 +68,8 @@ void buf_init(BoundedBuffer *buf, int capacity, size_t esz)
 {
     buf->data = malloc((size_t)capacity * esz);
     if (buf->data == NULL) {
-    fprintf(stderr, "Error: malloc failed for buffer data\n");
-    exit(1);
+        fprintf(stderr, "Error: malloc failed for buffer data\n");
+        exit(1);
     }
     buf->capacity = capacity;
     buf->head = 0;
