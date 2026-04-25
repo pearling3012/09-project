@@ -36,8 +36,6 @@ typedef struct {
     int active_writers;
     int waiting_supervisors;
     int waiting_managers;
-    int current_writer_type;  
-    int current_writer_id;
 } DirLock;
 
 typedef enum {
@@ -103,8 +101,6 @@ static void dirlock_init(DirLock *lock) {
     lock->active_writers = 0;
     lock->waiting_supervisors = 0;
     lock->waiting_managers = 0;
-    lock->current_writer_type = 0;
-    lock->current_writer_id = -1;
 }
 
 static void dirlock_destroy(DirLock *lock) {
@@ -114,8 +110,7 @@ static void dirlock_destroy(DirLock *lock) {
     pthread_cond_destroy(&lock->cv_supervisors);
 }
 
-static int dirlock_read_acquire(DirLock *lock, int worker_id) {
-    (void)worker_id;
+static int dirlock_read_acquire(DirLock *lock) {
     pthread_mutex_lock(&lock->mutex);
     
     int was_blocked = 0;
@@ -124,10 +119,16 @@ static int dirlock_read_acquire(DirLock *lock, int worker_id) {
         pthread_cond_wait(&lock->cv_readers, &lock->mutex);
     }
     
+    if (was_blocked) {
+        lock->active_readers++;
+        pthread_mutex_unlock(&lock->mutex);
+        return -1;
+    }
+    
     int concurrent = (lock->active_readers > 0) ? 1 : 0;
     lock->active_readers++;
     pthread_mutex_unlock(&lock->mutex);
-    return was_blocked ? -1 : concurrent;
+    return concurrent;
 }
 
 static void dirlock_read_release(DirLock *lock) {
@@ -138,12 +139,11 @@ static void dirlock_read_release(DirLock *lock) {
         if (lock->waiting_supervisors > 0) pthread_cond_signal(&lock->cv_supervisors);
         else if (lock->waiting_managers > 0) pthread_cond_signal(&lock->cv_managers);
     }
-    
+
     pthread_mutex_unlock(&lock->mutex);
 }
 
-static int dirlock_write_acquire(DirLock *lock, int writer_id, int is_supervisor) {
-    (void)writer_id;
+static int dirlock_write_acquire(DirLock *lock, int is_supervisor) {
     pthread_mutex_lock(&lock->mutex);
     
     if (is_supervisor) lock->waiting_supervisors++;
@@ -160,13 +160,9 @@ static int dirlock_write_acquire(DirLock *lock, int writer_id, int is_supervisor
     if (is_supervisor && lock->waiting_managers > 0) preempts_manager = 1;
     if (is_supervisor) lock->waiting_supervisors--;
     else lock->waiting_managers--;
-    
     lock->active_writers++;
-    lock->current_writer_type = is_supervisor ? 2 : 1;
-    lock->current_writer_id = writer_id;
-    
+
     pthread_mutex_unlock(&lock->mutex);
-    
     return preempts_manager;
 }
 
@@ -185,7 +181,7 @@ static void* worker_thread(void *arg) {
     int worker_id = args->id;
     const char *filename = args->op.filename;
     
-    int blocked_status = dirlock_read_acquire(args->lock, worker_id);
+    int blocked_status = dirlock_read_acquire(args->lock);
     
     simulate_work(OP_Q2_WORKER_READ);
     
@@ -216,7 +212,7 @@ static void* manager_thread(void *arg) {
     printf("[Manager-%d] waiting for write lock\n", manager_id);
     pthread_mutex_unlock(&print_mutex);
     
-    int preempts = dirlock_write_acquire(args->lock, manager_id, 0);
+    int preempts = dirlock_write_acquire(args->lock, 0);
     
     simulate_work(OP_Q2_MANAGER_HANDLE);
     
@@ -239,7 +235,7 @@ static void* supervisor_thread(void *arg) {
     int supervisor_id = args->id;
     const char *filename = args->op.filename;
     
-    int preempts = dirlock_write_acquire(args->lock, supervisor_id, 1);
+    int preempts = dirlock_write_acquire(args->lock, 1);
     
     simulate_work(OP_Q2_SUPERVISOR_UPDATE);
     
