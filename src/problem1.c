@@ -372,8 +372,6 @@ static int run_order_pipeline(int P, int M, int N, int num_orders, int T,
         int ret = pthread_create(&qt[i], NULL, quantizer_thread, &qarg[i]);
         if (ret != 0) {
             perror("pthread_create (quantizer)");
-            free(qt);
-            free(qarg);
             return 1;
         }
         start += chunk;
