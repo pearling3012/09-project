@@ -1,3 +1,8 @@
+/* Group: 09
+   Members: PARINKARN Sasina   (EID: sparinkar2, ID: 59016540)
+            LE Vinh Thanh Linh (EID: vtlle2,     ID: 59257310)
+            BONGONI Revan      (EID: rbongoni2,  ID: 59036838)
+*/
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -61,15 +66,15 @@ typedef struct {
 
 void buf_init(BoundedBuffer *buf, int capacity, size_t esz)
 {
-    buf->data     = malloc((size_t)capacity * esz);
+    buf->data = malloc((size_t)capacity * esz);
     if (buf->data == NULL) {
-    fprintf(stderr, "Error: malloc failed for buffer data\n");
-    exit(1);
+        fprintf(stderr, "Error: malloc failed for buffer data\n");
+        exit(1);
     }
     buf->capacity = capacity;
-    buf->head     = 0;
-    buf->tail     = 0;
-    buf->esz      = esz;
+    buf->head = 0;
+    buf->tail = 0;
+    buf->esz = esz;
     pthread_mutex_init(&buf->mutex, NULL);
     sem_init(&buf->empty, 0, (unsigned)capacity);
     sem_init(&buf->full,  0, 0);
@@ -228,6 +233,35 @@ void *logger_thread(void *arg)
 }
 
 /*
+Purpose: Validate encoder token parameters.
+Args: P - number of encoders.
+      T - number of token types.
+      tA, tB - token type arrays (length P).
+Return: 0 on success, non-zero on error. Prints stderr on failure.
+*/
+static int validate_encoder_tokens(int P, int T, const int *tA, const int *tB)
+{
+    for (int i = 0; i < P; i++) {
+        if (tA[i] == tB[i]) {
+            fprintf(stderr, "Error: encoder %d has tA[%d]=%d same as tB[%d]=%d\n",
+                i, i, tA[i], i, tB[i]);
+            return 1;
+        }
+        if (tA[i] < 0 || tA[i] >= T) {
+            fprintf(stderr, "Error: encoder %d has tA[%d]=%d out of range [0, %d)\n",
+                i, i, tA[i], T);
+            return 1;
+        }
+        if (tB[i] < 0 || tB[i] >= T) {
+            fprintf(stderr, "Error: encoder %d has tB[%d]=%d out of range [0, %d)\n",
+                i, i, tB[i], T);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/*
 Purpose: Parse command-line arguments for the Q1 pipeline.
 Args: argc - number of command-line arguments.
       argv - command-line argument values.
@@ -286,42 +320,21 @@ int **counts, int **tA, int **tB)
 }
 
 /*
-Purpose: Parse command-line arguments and run the Q1 pipeline.
-Args: argc - number of command-line arguments.
-      argv - command-line argument values.
+Purpose: Initialize and run the order pipeline with all threads.
+         Handles buffer/pool/thread allocation, spawning, joining, and cleanup.
+Args: P - number of encoder/quantizer threads.
+      M - capacity of buf_A (raw packets).
+      N - capacity of buf_B (encoded packets).
+      num_orders - total number of orders to process.
+      T - number of token types.
+      counts - array of token counts (length T).
+      tA, tB - token type arrays for each encoder (length P).
 Return: 0 on success, non-zero on error.
+Note: Does not free counts, tA, tB; caller owns those.
 */
-int main(int argc, char *argv[])
+static int run_order_pipeline(int P, int M, int N, int num_orders, int T,
+                              const int *counts, const int *tA, const int *tB)
 {
-    int  P, M, N, num_orders, T;
-    int *counts = NULL, *tA = NULL, *tB = NULL;
-
-    if (parse_args(argc, argv, &P, &M, &N, &num_orders, &T,
-                   &counts, &tA, &tB) != 0)
-        return 1;
-
-    /* Validate token type parameters */
-    for (int i = 0; i < P; i++) {
-        if (tA[i] == tB[i]) {
-            fprintf(stderr, "Error: encoder %d has tA[%d]=%d same as tB[%d]=%d\n",
-            i, i, tA[i], i, tB[i]);
-            free(counts); free(tA); free(tB);
-            return 1;
-        }
-        if (tA[i] < 0 || tA[i] >= T) {
-            fprintf(stderr, "Error: encoder %d has tA[%d]=%d out of range [0, %d)\n",
-            i, i, tA[i], T);
-            free(counts); free(tA); free(tB);
-            return 1;
-        }
-        if (tB[i] < 0 || tB[i] >= T) {
-            fprintf(stderr, "Error: encoder %d has tB[%d]=%d out of range [0, %d)\n",
-            i, i, tB[i], T);
-            free(counts); free(tA); free(tB);
-            return 1;
-        }
-    }
-
     BoundedBuffer buf_A, buf_B;
     buf_init(&buf_A, M, sizeof(RawPacket));
     buf_init(&buf_B, N, sizeof(EncodedPacket));
@@ -338,13 +351,15 @@ int main(int argc, char *argv[])
     pthread_t *qt   = malloc((size_t)P * sizeof(pthread_t));
     if (qt == NULL) {
         fprintf(stderr, "Error: malloc failed for quantizer thread array\n");
-        exit(1);
+        return 1;
     }
     QuantizerArg *qarg = malloc((size_t)P * sizeof(QuantizerArg));
     if (qarg == NULL) {
         fprintf(stderr, "Error: malloc failed for quantizer arguments array\n");
-        exit(1);
+        free(qt);
+        return 1;
     }
+
     int base  = num_orders / P;
     int extra = num_orders % P;
     int start = 0;
@@ -357,7 +372,7 @@ int main(int argc, char *argv[])
         int ret = pthread_create(&qt[i], NULL, quantizer_thread, &qarg[i]);
         if (ret != 0) {
             perror("pthread_create (quantizer)");
-            exit(1);
+            return 1;
         }
         start += chunk;
     }
@@ -365,12 +380,17 @@ int main(int argc, char *argv[])
     pthread_t  *et   = malloc((size_t)P * sizeof(pthread_t));
     if (et == NULL) {
         fprintf(stderr, "Error: malloc failed for encoder thread array\n");
-        exit(1);
+        free(qt);
+        free(qarg);
+        return 1;
     }
     EncoderArg *earg = malloc((size_t)P * sizeof(EncoderArg));
     if (earg == NULL) {
         fprintf(stderr, "Error: malloc failed for encoder arguments array\n");
-        exit(1);
+        free(qt);
+        free(qarg);
+        free(et);
+        return 1;
     }
     for (int i = 0; i < P; i++) {
         earg[i].encoder_id = i;
@@ -382,7 +402,11 @@ int main(int argc, char *argv[])
         int ret = pthread_create(&et[i], NULL, encoder_thread, &earg[i]);
         if (ret != 0) {
             perror("pthread_create (encoder)");
-            exit(1);
+            free(qt);
+            free(qarg);
+            free(et);
+            free(earg);
+            return 1;
         }
     }
 
@@ -391,19 +415,60 @@ int main(int argc, char *argv[])
     int ret = pthread_create(&lt, NULL, logger_thread, &larg);
     if (ret != 0) {
         perror("pthread_create (logger)");
-        exit(1);
+        free(qt);
+        free(qarg);
+        free(et);
+        free(earg);
+        return 1;
     }
 
+    /* Join threads in order: quantizers, encoders, logger */
     for (int i = 0; i < P; i++) pthread_join(qt[i], NULL);
     for (int i = 0; i < P; i++) pthread_join(et[i], NULL);
     pthread_join(lt, NULL);
 
+    /* Cleanup thread-local resources */
     buf_destroy(&buf_A);
     buf_destroy(&buf_B);
     pool_destroy(&pool);
     pthread_mutex_destroy(&term.mutex);
-    free(qt); free(qarg);
-    free(et); free(earg);
-    free(counts); free(tA); free(tB);
+    free(qt);
+    free(qarg);
+    free(et);
+    free(earg);
+
     return 0;
 }
+
+/*
+Purpose: Coordinate parsing, validation, and running the Q1 pipeline.
+         Handles main-owned allocations (counts, tA, tB).
+Args: argc - number of command-line arguments.
+      argv - command-line argument values.
+Return: 0 on success, non-zero on error.
+*/
+int main(int argc, char *argv[])
+{
+    int  P, M, N, num_orders, T;
+    int *counts = NULL, *tA = NULL, *tB = NULL;
+
+    if (parse_args(argc, argv, &P, &M, &N, &num_orders, &T,
+                   &counts, &tA, &tB) != 0)
+        return 1;
+
+    if (validate_encoder_tokens(P, T, tA, tB) != 0) {
+        free(counts);
+        free(tA);
+        free(tB);
+        return 1;
+    }
+
+    int ret = run_order_pipeline(P, M, N, num_orders, T, counts, tA, tB);
+
+    free(counts);
+    free(tA);
+    free(tB);
+
+    return ret;
+}
+
