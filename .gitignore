@@ -1,0 +1,17 @@
+# Compiled binaries
+warehouse
+pipeline
+scheduler
+
+# Object files
+*.o
+
+# macOS
+.DS_Store
+
+# Temporary files
+*.tmp
+*~
+
+#vscode
+.vscode
